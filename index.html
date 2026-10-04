@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body>
+<title>FC Pass Trainer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+/* Layout: one column — scoreboard strip, pitch canvas, then mode picker and results. Single committed floodlit-pitch look. */
+:root{
+  --bg:#0b1a12;--surface:#11251a;--line:#24412f;--fg:#eaf3ec;--muted:#93ab9c;
+  --accent:#e9f25c;--ok:#4cc96f;--warn:#e0a83a;--bad:#ef5b4f;--mate:#62a8ff;
+  --pitch-a:#0f3d22;--pitch-b:#124628;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Barlow",system-ui,"Segoe UI",sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{background:var(--bg);color:var(--fg)}
+body{font:15px/1.5 var(--body);padding-inline:16px;padding-block:16px 32px}
+.wrap{max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+h1,h2,h3,h4{font-family:var(--display);font-weight:700;letter-spacing:.02em;text-wrap:balance;margin:0}
+h1{font-size:30px;text-transform:uppercase}
+h2{font-size:22px;text-transform:uppercase}
+h3{font-size:18px}
+.muted{color:var(--muted)}
+.top{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.top>div{min-width:0}
+#padinfo{font-size:13px;overflow-wrap:anywhere}
+.board{display:flex;gap:2px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden;flex-wrap:wrap}
+.board>div{background:var(--surface);padding:6px 14px;min-width:76px;flex:1}
+.board span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.board b{font:700 24px/1.1 var(--display);font-variant-numeric:tabular-nums}
+.progress{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.progress>i{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
+canvas{display:block;width:100%;max-width:100%;height:auto;border-radius:10px;border:1px solid var(--line);background:var(--pitch-a)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+.mode{border:1px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:4px;background:var(--bg);color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.mode.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.mode:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.kbd{display:inline-block;border:1px solid var(--line);border-radius:4px;padding:0 6px;font-size:13px;background:var(--bg)}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+td,th{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line)}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.dirs{display:flex;gap:24px;flex-wrap:wrap}
+.dirs>div{flex:1;min-width:0;flex-basis:280px;display:flex;flex-direction:column;gap:8px}
+.btn{font:inherit;padding:6px 12px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer;align-self:flex-start}
+#notice{border:1px solid var(--warn);color:var(--warn);border-radius:8px;padding:10px 12px}
+@media (prefers-reduced-motion:reduce){.progress>i{transition:none}}
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <div><h1>FC Pass Trainer</h1><div class="muted" id="padinfo">Press any button on your controller…</div></div>
+    <div class="board" aria-live="polite">
+      <div><span id="lProg">Pass</span><b id="sProg">–</b></div>
+      <div><span>Score</span><b id="sScore">0</b></div>
+      <div><span>Hits</span><b id="sHits">0</b></div>
+      <div><span>Streak</span><b id="sStreak">0</b></div>
+    </div>
+  </div>
+  <div id="notice" hidden></div>
+  <div class="progress"><i id="bar"></i></div>
+  <canvas id="cv" width="960" height="540" aria-label="Training pitch"></canvas>
+  <div class="panel">
+    <div>Pick a mode with <span class="kbd">←</span> <span class="kbd">→</span> on the D-pad, start with <span class="kbd">A</span> or <span class="kbd">Menu</span>, quit early with <span class="kbd">View</span>.</div>
+    <div class="modes" id="modes"></div>
+    <div id="result"></div>
+  </div>
+</div>
+
+<script>
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=cv.width,H=cv.height,CX=W/2,CY=H/2,R=210;
+const C={ok:'#4cc96f',bad:'#ef5b4f',mate:'#62a8ff',me:'#ef5b4f',accent:'#e9f25c',pa:'#0f3d22',pb:'#124628'};
+const PASSES_PER_DIR=3, DIRS=['Right','Down-right','Down','Down-left','Left','Up-left','Up','Up-right'];
+const PASS_TOTAL=PASSES_PER_DIR*DIRS.length, TRACK_MS=60000, TRACK_R=.16;
+const MODES=[
+ {id:'pass',name:'Pass direction',desc:`A teammate appears around you. Aim the <b>left stick</b> at them and press <b>A</b>. No aiming line until after the pass, like in the game. ${PASS_TOTAL} passes per round, ${PASSES_PER_DIR} in each direction.`},
+ {id:'track',name:'Fine control',desc:'Keep your dot inside the moving ring with the <b>left stick</b> for 60 seconds. Trains small, steady stick movements for dribbling.'}
+];
+const $=id=>document.getElementById(id);
+const store={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
+let modeIdx=0,state='menu',game=null,prevBtn=[],best=store.get('fcpass_best',{}),allDirs=store.get('fcpass_dirs',[]);
+
+function renderModes(){
+  $('modes').innerHTML=MODES.map((m,i)=>`<button class="mode ${i===modeIdx?'sel':''}" id="mode-${m.id}" data-i="${i}"><h3>${m.name}</h3><span class="muted">${m.desc}</span><span>Best: <b>${best[m.id]||0}</b></span></button>`).join('');
+  $('modes').querySelectorAll('.mode').forEach(b=>b.onclick=()=>{modeIdx=+b.dataset.i;renderModes()});
+}
+renderModes();
+
+let padBlocked=false;
+function getPad(){
+  let list=[];
+  try{list=[...(navigator.getGamepads?navigator.getGamepads():[])].filter(Boolean)}
+  catch(e){if(!padBlocked){padBlocked=true;$('notice').hidden=false;$('notice').textContent='This view blocks controller access. Open the page in its own browser tab and try again.'}}
+  return list.find(p=>/360|XInput/i.test(p.id))||list[0];
+}
+const stick=(p,i)=>{const x=p.axes[i]||0,y=p.axes[i+1]||0;return{x,y,m:Math.hypot(x,y),a:Math.atan2(y,x)}};
+const signedDiff=(a,b)=>{let d=a-b;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;return d}; // + = clockwise on screen
+const angDiff=(a,b)=>Math.abs(signedDiff(a,b));
+const pressed=(p,i)=>p.buttons[i]&&p.buttons[i].pressed;
+const edge=(p,i)=>pressed(p,i)&&!prevBtn[i];
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const avg=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
+const sectorOf=a=>{const x=a<0?a+2*Math.PI:a;return Math.round(x/(Math.PI/4))%8};
+
+function recordDir(target,err,ok){
+  const s={s:sectorOf(target),e:err,ok};game.dirs.push(s);allDirs.push(s);
+  if(allDirs.length>3000)allDirs=allDirs.slice(-3000);store.set('fcpass_dirs',allDirs);
+}
+function resetDirs(){allDirs=[];store.del('fcpass_dirs');const el=$('dirAll');if(el)el.innerHTML=dirReport([],'All rounds')}
+
+function dirReport(samples,title){
+  const by=DIRS.map(()=>({n:0,hit:0,errs:[]}));
+  samples.forEach(x=>{const b=by[x.s];b.n++;if(x.ok)b.hit++;if(x.e!==null)b.errs.push(x.e)});
+  const col=b=>!b.n?'#24412f':b.hit/b.n>=.8?C.ok:b.hit/b.n>=.6?'#e0a83a':C.bad;
+  const P=(a,r)=>`${(Math.cos(a)*r).toFixed(1)} ${(Math.sin(a)*r).toFixed(1)}`;
+  let svg=`<svg viewBox="-120 -120 240 240" width="230" height="230" style="max-width:100%" role="img" aria-label="Hit rate by direction">`;
+  by.forEach((b,i)=>{const a0=(i-.5)*Math.PI/4,a1=(i+.5)*Math.PI/4,r=100,ri=28;
+    svg+=`<path d="M${P(a0,ri)} L${P(a0,r)} A${r} ${r} 0 0 1 ${P(a1,r)} L${P(a1,ri)} A${ri} ${ri} 0 0 0 ${P(a0,ri)}Z" fill="${col(b)}" fill-opacity=".8" stroke="#11251a" stroke-width="2"/>`;
+    const lm=i*Math.PI/4;
+    svg+=`<text x="${(Math.cos(lm)*66).toFixed(1)}" y="${(Math.sin(lm)*66+4).toFixed(1)}" text-anchor="middle" font-size="13" font-weight="700" fill="#eaf3ec">${b.n?Math.round(100*b.hit/b.n)+'%':'–'}</text>`});
+  svg+=`<circle r="10" fill="${C.me}" stroke="#eaf3ec" stroke-width="2"/></svg>`;
+  const rows=by.map((b,i)=>{
+    if(!b.n)return `<tr><td>${DIRS[i]}</td><td colspan="3" class="muted">no data</td></tr>`;
+    const q=Math.round(100*b.hit/b.n),bias=avg(b.errs),absE=avg(b.errs.map(Math.abs));
+    const bt=Math.abs(bias)<3?'<span class="muted">neutral</span>':(bias>0?'↻ ':'↺ ')+Math.abs(bias).toFixed(0)+'°';
+    return `<tr><td>${DIRS[i]}</td><td class="${q>=80?'ok':q>=60?'warn':'bad'}">${q}% <span class="muted">(${b.hit}/${b.n})</span></td><td>${absE.toFixed(1)}°</td><td>${bt}</td></tr>`}).join('');
+  const withData=by.map((b,i)=>({i,b})).filter(x=>x.b.errs.length>=2);
+  let tip='';
+  if(withData.length>=2){
+    const w=withData.reduce((m,x)=>avg(x.b.errs.map(Math.abs))>avg(m.b.errs.map(Math.abs))?x:m);
+    const up=[5,6,7].flatMap(i=>by[i].errs.map(Math.abs)),down=[1,2,3].flatMap(i=>by[i].errs.map(Math.abs));
+    tip=`<p>Weakest direction: <b>${DIRS[w.i]}</b> (${avg(w.b.errs.map(Math.abs)).toFixed(1)}° off on average).`;
+    if(up.length>=3&&down.length>=3)tip+=` Upward passes ${avg(up).toFixed(1)}° off vs. downward ${avg(down).toFixed(1)}°.`;
+    tip+='</p>';
+  }
+  return `<h4>${title} <span class="muted">(${samples.length} passes)</span></h4>${svg}${tip}
+  <div class="tablewrap"><table><tr><th>Direction</th><th>Hits</th><th>Avg error</th><th>Tendency</th></tr>${rows}</table></div>`;
+}
+
+// Build a balanced deck: N passes per direction, random angle within each sector, shuffled
+function passDeck(){
+  const d=[];for(let s=0;s<8;s++)for(let k=0;k<PASSES_PER_DIR;k++)d.push(s*Math.PI/4+rnd(-Math.PI/8,Math.PI/8)*.85);
+  for(let i=d.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[d[i],d[j]]=[d[j],d[i]]}
+  return d;
+}
+function start(){
+  const m=MODES[modeIdx].id;
+  game={mode:m,t0:performance.now(),score:0,hits:0,shots:0,streak:0,bestStreak:0,errs:[],times:[],dirs:[],last:null,fx:[],done:false};
+  if(m==='pass')game.deck=passDeck();
+  if(m==='track'){game.tp={x:0,y:0,vx:rnd(-.8,.8),vy:rnd(-.8,.8)};game.inside=0;game.total=0}
+  nextTarget();state='play';$('result').innerHTML='';
+}
+function nextTarget(){
+  const g=game;g.tAt=performance.now();
+  if(g.mode==='pass'){
+    if(g.shots>=PASS_TOTAL){g.done=true;return}
+    g.target=g.deck[g.shots];g.tol=Math.max(.16,.32-g.hits*.004);
+  }
+}
+function addFx(txt,col){game.fx.push({txt,col,t:performance.now()})}
+function hit(pts,err){const g=game;g.hits++;g.shots++;g.streak++;g.bestStreak=Math.max(g.bestStreak,g.streak);
+  pts=Math.round(pts*(1+Math.min(g.streak,10)*.1));g.score+=pts;g.errs.push(err);g.times.push(performance.now()-g.tAt);addFx('+'+pts,C.ok);nextTarget()}
+function miss(txt){const g=game;g.shots++;g.streak=0;addFx(txt,C.bad);nextTarget()}
+
+function update(p,now){
+  const g=game,L=stick(p,0);
+  if(g.mode==='pass'&&edge(p,0)){
+    if(L.m<.35){g.last={a:null,target:g.target,tol:g.tol,ok:false};recordDir(g.target,null,false);return miss('Stick not pushed')}
+    const e=angDiff(L.a,g.target),ok=e<=g.tol;
+    g.last={a:L.a,target:g.target,tol:g.tol,ok};
+    recordDir(g.target,signedDiff(L.a,g.target)*180/Math.PI,ok);
+    if(ok){const rt=now-g.tAt;hit(Math.round(100*(1-e/g.tol)*.6+Math.max(0,40-rt/40)),e*180/Math.PI)}
+    else miss(`${Math.round(e*180/Math.PI)}° off`);
+  }
+  if(g.mode==='track'){
+    const t=g.tp,dt=1/60;t.x+=t.vx*dt*.85;t.y+=t.vy*dt*.85;
+    if(Math.random()<.015){t.vx=rnd(-1,1);t.vy=rnd(-1,1)}
+    const m=Math.hypot(t.x,t.y);if(m>.85){t.x*=.85/m;t.y*=.85/m;t.vx*=-1;t.vy*=-1}
+    const d=Math.hypot(L.x-t.x,L.y-t.y);g.total++;
+    if(d<TRACK_R){g.inside++;g.score++;g.streak++;g.bestStreak=Math.max(g.bestStreak,Math.floor(g.streak/60))}else g.streak=0;
+    g.errs.push(d);g.hits=Math.round(100*g.inside/g.total);
+    if(now-g.t0>=TRACK_MS)g.done=true;
+  }
+}
+
+function drawPitch(){
+  for(let i=0;i<8;i++){ctx.fillStyle=i%2?C.pb:C.pa;ctx.fillRect(i*W/8,0,W/8,H)}
+  ctx.strokeStyle='rgba(255,255,255,.22)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(CX,CY,R,0,7);ctx.stroke();
+}
+function dot(x,y,col,r=14){ctx.fillStyle=col;ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke()}
+function ray(a,col){ctx.strokeStyle=col;ctx.lineWidth=3;ctx.setLineDash([8,6]);ctx.beginPath();ctx.moveTo(CX,CY);ctx.lineTo(CX+Math.cos(a)*R,CY+Math.sin(a)*R);ctx.stroke();ctx.setLineDash([])}
+function draw(p,now){
+  drawPitch();const g=game;
+  if(state==='play'&&g){
+    const L=p?stick(p,0):{x:0,y:0};
+    if(g.mode==='pass'){
+      const lp=g.last; // stays visible until the next pass
+      if(lp){const c=lp.ok?C.ok:C.bad;
+        ctx.fillStyle=lp.ok?'rgba(76,201,111,.15)':'rgba(239,91,79,.15)';ctx.beginPath();ctx.moveTo(CX,CY);ctx.arc(CX,CY,R+30,lp.target-lp.tol,lp.target+lp.tol);ctx.fill();
+        ctx.strokeStyle='rgba(255,255,255,.5)';ctx.lineWidth=2;ctx.setLineDash([4,4]);ctx.beginPath();ctx.arc(CX+Math.cos(lp.target)*R,CY+Math.sin(lp.target)*R,14,0,7);ctx.stroke();ctx.setLineDash([]);
+        if(lp.a!==null){ray(lp.a,c);ctx.fillStyle=c;ctx.beginPath();ctx.arc(CX+Math.cos(lp.a)*R,CY+Math.sin(lp.a)*R,7,0,7);ctx.fill()}}
+      if(!g.done)dot(CX+Math.cos(g.target)*R,CY+Math.sin(g.target)*R,C.mate);
+      dot(CX,CY,C.me,16);
+    }
+    if(g.mode==='track'){
+      const t=g.tp;ctx.strokeStyle=C.mate;ctx.lineWidth=4;ctx.beginPath();ctx.arc(CX+t.x*R,CY+t.y*R,TRACK_R*R,0,7);ctx.stroke();
+      dot(CX+L.x*R,CY+L.y*R,Math.hypot(L.x-t.x,L.y-t.y)<TRACK_R?C.ok:C.bad,9);
+    }
+    g.fx=g.fx.filter(f=>now-f.t<800);
+    g.fx.forEach(f=>{const a=1-(now-f.t)/800;ctx.globalAlpha=a;ctx.fillStyle=f.col;ctx.font='700 30px "Barlow Condensed",system-ui';ctx.textAlign='center';ctx.fillText(f.txt,CX,CY+R+12-(1-a)*40);ctx.globalAlpha=1});
+  } else {
+    ctx.textAlign='center';ctx.fillStyle='#fff';ctx.font='700 44px "Barlow Condensed",system-ui';ctx.fillText(MODES[modeIdx].name.toUpperCase(),CX,CY-6);
+    ctx.font='18px Barlow,system-ui';ctx.fillStyle='#cfe0d4';ctx.fillText(p?'Press A to start  ·  ←/→ to switch mode':'Press any button on your controller',CX,CY+32);
+  }
+}
+
+function finish(){
+  const g=game,m=g.mode;state='menu';
+  const record=g.score>(best[m]||0);if(record){best[m]=g.score;store.set('fcpass_best',best)}
+  let rows,extra='';
+  if(m==='track'){
+    rows=`<tr><td>Time inside the ring</td><td><b>${g.hits}%</b></td></tr><tr><td>Avg distance</td><td>${(avg(g.errs)*100).toFixed(1)} <span class="muted">(lower is better)</span></td></tr>`;
+  } else {
+    const acc=g.shots?Math.round(100*g.hits/g.shots):0;
+    rows=`<tr><td>Accuracy</td><td class="${acc>=80?'ok':acc>=60?'warn':'bad'}"><b>${acc}%</b> (${g.hits}/${g.shots})</td></tr>
+    <tr><td>Avg angle error (hits)</td><td>${avg(g.errs).toFixed(1)}°</td></tr>
+    <tr><td>Avg reaction time</td><td>${Math.round(avg(g.times))} ms</td></tr>
+    <tr><td>Best streak</td><td>${g.bestStreak}</td></tr>`;
+    extra=`<h2>By direction</h2><p class="muted">Tendency: ↻ means you miss clockwise, ↺ counter-clockwise. “Up ↻ 8°” means your upward passes land 8° to the right of the teammate.</p>
+    <div class="dirs"><div>${dirReport(g.dirs,'This round')}</div><div id="dirAll">${dirReport(allDirs,'All rounds')}</div></div>
+    <button class="btn" id="resetDirs">Reset all-rounds stats</button>`;
+  }
+  $('result').innerHTML=`<div style="display:flex;flex-direction:column;gap:10px"><h2>${MODES.find(x=>x.id===m).name}: ${g.score} points${record?' · new best':''}</h2><div class="tablewrap"><table>${rows}</table></div>${extra}</div>`;
+  const rb=$('resetDirs');if(rb)rb.onclick=resetDirs;
+  renderModes();
+}
+
+function hud(now){
+  const g=game;if(!g)return;
+  if(g.mode==='pass'){$('lProg').textContent='Pass';$('sProg').textContent=`${Math.min(g.shots+(state==='play'&&!g.done?1:0),PASS_TOTAL)}/${PASS_TOTAL}`;$('bar').style.width=(100*g.shots/PASS_TOTAL)+'%'}
+  else{const left=state==='play'?Math.max(0,TRACK_MS-(now-g.t0)):0;$('lProg').textContent='Time';$('sProg').textContent=Math.ceil(left/1000)+'s';$('bar').style.width=(100*(1-left/TRACK_MS))+'%'}
+  $('sScore').textContent=g.score;$('sHits').textContent=g.mode==='track'?g.hits+'%':g.hits;$('sStreak').textContent=g.mode==='track'?'–':g.streak;
+}
+function loop(now){
+  const p=getPad();
+  $('padinfo').textContent=p?`Controller: ${p.id}`:'Press any button on your controller…';
+  if(p){
+    if(state==='menu'){
+      if(edge(p,14)){modeIdx=(modeIdx+MODES.length-1)%MODES.length;renderModes()}
+      if(edge(p,15)){modeIdx=(modeIdx+1)%MODES.length;renderModes()}
+      if(edge(p,0)||edge(p,9))start();
+    } else if(state==='play'){
+      if(edge(p,8))game.done=true; else update(p,now);
+      if(game.done)finish();
+    }
+    prevBtn=p.buttons.map(b=>b.pressed);
+  }
+  hud(now);draw(p,now);requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+
+</body>
+</html>

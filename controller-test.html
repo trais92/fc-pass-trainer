@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Controller Tester</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1b1f24;--mut:#6a737d;--ok:#1a7f37;--warn:#bf8700;--bad:#cf222e;--acc:#0969da;--line:#d0d7de}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--card:#161b22;--fg:#e6edf3;--mut:#8b949e;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#58a6ff;--line:#30363d}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,Segoe UI,sans-serif;padding:16px}
+h1{font-size:20px;margin:0 0 4px}.mut{color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:12px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px}
+.btn{border:1px solid var(--line);border-radius:6px;padding:6px;text-align:center;font-size:12px;position:relative}
+.btn.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.btn.tested{box-shadow:inset 0 -3px 0 var(--ok)}
+.trig{display:grid;grid-template-columns:60px 1fr 150px;gap:8px;align-items:center;margin:6px 0}
+.bar{height:22px;border:1px solid var(--line);border-radius:5px;overflow:hidden;position:relative}
+.bar>i{position:absolute;inset:0 auto 0 0;background:var(--acc);width:0}
+.bar>b{position:absolute;top:0;bottom:0;width:2px;background:var(--ok)}
+.sticks{display:flex;gap:16px;flex-wrap:wrap}
+canvas{border:1px solid var(--line);border-radius:50%;background:var(--bg)}
+table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+button{font:inherit;padding:6px 12px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+</style>
+</head>
+<body>
+<h1>Controller Tester</h1>
+<div class="mut">Drück eine Taste am Controller, damit der Browser ihn erkennt. Das Fenster muss im Fokus sein.</div>
+<div id="summary" class="card">Warte auf Controller…</div>
+<div id="pads"></div>
+<script>
+const NAMES=['A','B','X','Y','LB','RB','LT','RT','View','Menu','L3','R3','↑','↓','←','→','Guide'];
+const st={}; // per pad index
+let lagSamples=[];
+function pad(i){return st[i]||(st[i]={tested:new Set(),tMax:[0,0],tMin:[1,1],lastTs:0,updates:0,winStart:performance.now(),rate:0,prev:null,stuck:new Set(),changeAt:[],axMax:[0,0,0,0]})}
+function el(h){const d=document.createElement('div');d.innerHTML=h;return d.firstElementChild}
+function ensureCard(g){
+  let c=document.getElementById('pad'+g.index);if(c)return c;
+  c=el(`<div class="card" id="pad${g.index}"><b>#${g.index}: ${g.id}</b> <span class="mut">mapping: ${g.mapping||'none'}</span>
+  <div class="mut" data-k="rate"></div>
+  <h3>Trigger (analog)</h3>
+  <div class="trig"><span>LT</span><div class="bar"><i data-k="lt"></i></div><span data-k="ltv"></span></div>
+  <div class="trig"><span>RT</span><div class="bar"><i data-k="rt"></i></div><span data-k="rtv"></span></div>
+  <h3>Tasten</h3><div class="grid" data-k="btns"></div>
+  <h3>Sticks</h3><div class="sticks"><canvas width="140" height="140" data-k="ls"></canvas><canvas width="140" height="140" data-k="rs"></canvas><div data-k="axv" class="mut"></div></div>
+  <p><button data-k="reset">Werte zurücksetzen</button></p></div>`);
+  const grid=c.querySelector('[data-k=btns]');
+  g.buttons.forEach((b,i)=>grid.appendChild(el(`<div class="btn" data-b="${i}">${NAMES[i]||'B'+i}</div>`)));
+  c.querySelector('[data-k=reset]').onclick=()=>{delete st[g.index];c.querySelectorAll('.tested').forEach(x=>x.classList.remove('tested'))};
+  document.getElementById('pads').appendChild(c);return c;
+}
+function drawStick(cv,x,y){const c=cv.getContext('2d'),r=70;c.clearRect(0,0,140,140);c.strokeStyle='#888';c.beginPath();c.arc(r,r,r-4,0,7);c.stroke();
+  c.fillStyle=getComputedStyle(document.body).getPropertyValue('--acc');c.beginPath();c.arc(r+x*(r-10),r+y*(r-10),8,0,7);c.fill()}
+function sig(g){return g.buttons.map(b=>b.value.toFixed(3)).join()+'|'+g.axes.map(a=>a.toFixed(3)).join()}
+function loop(){
+  const now=performance.now();
+  const gps=[...navigator.getGamepads()].filter(Boolean);
+  for(const g of gps){
+    const s=pad(g.index),c=ensureCard(g);
+    if(g.timestamp!==s.lastTs){s.updates++;s.lastTs=g.timestamp;}
+    if(now-s.winStart>=1000){s.rate=s.updates*1000/(now-s.winStart);s.updates=0;s.winStart=now;}
+    const cur=sig(g); if(s.prev!==null&&cur!==s.prev){s.changeAt.push(now);s.lastChange=now;s.lastSig=cur;} s.prev=cur;
+    g.buttons.forEach((b,i)=>{const d=c.querySelector(`[data-b="${i}"]`);if(!d)return;d.classList.toggle('on',b.pressed);if(b.pressed)s.tested.add(i),d.classList.add('tested')});
+    [6,7].forEach((bi,k)=>{const v=g.buttons[bi]?g.buttons[bi].value:0;s.tMax[k]=Math.max(s.tMax[k],v);
+      c.querySelector(`[data-k=${k?'rt':'lt'}]`).style.width=(v*100)+'%';
+      const full=s.tMax[k]>=0.99;
+      c.querySelector(`[data-k=${k?'rtv':'ltv'}]`).innerHTML=`${(v*100).toFixed(1)}% · max <span class="${full?'ok':'warn'}">${(s.tMax[k]*100).toFixed(1)}%</span>`});
+    g.axes.forEach((a,i)=>s.axMax[i]=Math.max(s.axMax[i]||0,Math.abs(a)));
+    drawStick(c.querySelector('[data-k=ls]'),g.axes[0]||0,g.axes[1]||0);
+    drawStick(c.querySelector('[data-k=rs]'),g.axes[2]||0,g.axes[3]||0);
+    const drift=[Math.hypot(g.axes[0]||0,g.axes[1]||0),Math.hypot(g.axes[2]||0,g.axes[3]||0)];
+    c.querySelector('[data-k=axv]').innerHTML=`Achsen: ${g.axes.map(a=>a.toFixed(3)).join(' / ')}<br>Ruhe-Auslenkung L: ${drift[0].toFixed(3)} R: ${drift[1].toFixed(3)}<br>Max erreicht: ${s.axMax.map(a=>a.toFixed(2)).join(' / ')}`;
+    c.querySelector('[data-k=rate]').textContent=`Update-Rate (beim Bewegen): ${s.rate.toFixed(0)} Hz`;
+  }
+  // Lag between pads: when two pads exist, match change events
+  if(gps.length>=2){
+    const [a,b]=gps.map(g=>pad(g.index));
+    while(a.changeAt.length&&b.changeAt.length){const ta=a.changeAt.shift(),tb=b.changeAt.shift();const d=tb-ta;if(Math.abs(d)<200)lagSamples.push(d);}
+    if(lagSamples.length>300)lagSamples=lagSamples.slice(-300);
+  } else gps.forEach(g=>pad(g.index).changeAt.length=0);
+  renderSummary(gps);
+  requestAnimationFrame(loop);
+}
+function renderSummary(gps){
+  if(!gps.length){document.getElementById('summary').textContent='Warte auf Controller… (Taste drücken)';return}
+  let h='<table><tr><th>Pad</th><th>Tasten getestet</th><th>LT max</th><th>RT max</th><th>Update-Rate</th></tr>';
+  for(const g of gps){const s=pad(g.index);const n=g.buttons.length;
+    h+=`<tr><td>#${g.index} ${g.id.slice(0,40)}</td><td class="${s.tested.size>=Math.min(n,17)?'ok':'warn'}">${s.tested.size}/${n}</td>
+    <td class="${s.tMax[0]>=.99?'ok':'warn'}">${(s.tMax[0]*100).toFixed(0)}%</td><td class="${s.tMax[1]>=.99?'ok':'warn'}">${(s.tMax[1]*100).toFixed(0)}%</td><td>${s.rate.toFixed(0)} Hz</td></tr>`}
+  h+='</table>';
+  if(gps.length>=2&&lagSamples.length){const so=[...lagSamples].sort((x,y)=>x-y),med=so[so.length>>1];
+    h+=`<p>Versatz Pad #${gps[1].index} gegenüber #${gps[0].index} (Median aus ${so.length} Änderungen): <b class="${Math.abs(med)<8?'ok':Math.abs(med)<20?'warn':'bad'}">${med.toFixed(1)} ms</b></p>`}
+  else if(gps.length===1) h+='<p class="mut">Nur ein Controller sichtbar – der echte ist vermutlich durch HidHide versteckt (normal). Verzögerung zwischen echt und virtuell lässt sich so nicht direkt messen.</p>';
+  document.getElementById('summary').innerHTML=h;
+}
+window.addEventListener('gamepadconnected',e=>console.log('connected',e.gamepad.id));
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
